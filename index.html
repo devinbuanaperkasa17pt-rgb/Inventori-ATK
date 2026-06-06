@@ -866,6 +866,16 @@ async function api(aksi, data = {}) {
   } catch(e) {}
 })();
 
+async function loadLoginData() {
+  // Kalau sudah ada data, tidak perlu fetch ulang
+  if (STATE.staff && STATE.staff.length > 0) return;
+  try {
+    const [rDiv, rStaff] = await Promise.all([api('getDivisi'), api('getAllStaff')]);
+    STATE.divisi = rDiv || [];
+    STATE.staff  = rStaff || [];
+  } catch(e) {}
+}
+
 // ── TOAST ────────────────────────────────────────────────────
 function toast(msg, type = '') {
   const wrap = document.getElementById('toast');
@@ -2377,6 +2387,19 @@ document.querySelectorAll('.modal-overlay').forEach(m => {
 
 // Init tema saat halaman pertama kali dimuat
 initTheme();
+
+// Auto-login jika ada parameter ?id= di URL (dari scan QR iPhone)
+(async function checkUrlLogin() {
+  const params = new URLSearchParams(window.location.search);
+  const idFromUrl = params.get('id');
+  if (!idFromUrl) return;
+  // Bersihkan URL tanpa reload
+  window.history.replaceState({}, '', window.location.pathname);
+  // Tunggu data staff selesai load
+  await loadLoginData();
+  // Langsung proses login
+  await doLoginBarcode(idFromUrl);
+})();
 </script>
 </body>
 </html>
