@@ -319,6 +319,15 @@ tbody tr:hover { background: var(--surface2); }
             <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
             Izinkan & Aktifkan Kamera
           </button>
+          <!-- Fallback iOS: ambil foto langsung -->
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+            <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Atau ambil foto QR Code:</div>
+            <label style="display:inline-flex;align-items:center;gap:6px;padding:8px 18px;background:var(--surface3);border:1px solid var(--border);border-radius:var(--r);font-size:13px;font-weight:600;color:var(--text);cursor:pointer">
+              <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              Foto QR Code
+              <input type="file" accept="image/*" capture="environment" style="display:none" onchange="scanFotoQR(this)"/>
+            </label>
+          </div>
         </div>
 
         <div id="barcode-scan-status" style="font-size:12px;color:var(--accent);font-weight:600;margin-top:6px;min-height:18px"></div>
@@ -957,6 +966,60 @@ function showCameraBlockedNotice() {
 }
 
 // ── BARCODE LOGIN ─────────────────────────────────────────────
+async function scanFotoQR(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('barcode-scan-status');
+  statusEl.textContent = 'Memproses foto...';
+
+  const img = new Image();
+  img.onload = function() {
+    const canvas = document.createElement('canvas');
+    canvas.width  = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    // Coba BarcodeDetector dulu (Chrome)
+    if ('BarcodeDetector' in window) {
+      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      detector.detect(canvas).then(results => {
+        if (results.length > 0) {
+          statusEl.textContent = '✓ QR terbaca!';
+          document.getElementById('inp-barcode-manual').value = results[0].rawValue;
+          doLoginBarcode(results[0].rawValue);
+        } else {
+          statusEl.textContent = 'QR tidak terbaca, coba foto ulang lebih dekat';
+        }
+      }).catch(() => tryJsQR(imageData, statusEl));
+    } else if (typeof jsQR !== 'undefined') {
+      tryJsQR(imageData, statusEl);
+    } else {
+      // Tunggu jsQR load maks 3 detik
+      let wait = 0;
+      const t = setInterval(() => {
+        wait += 200;
+        if (typeof jsQR !== 'undefined') { clearInterval(t); tryJsQR(imageData, statusEl); }
+        else if (wait >= 3000) { clearInterval(t); statusEl.textContent = 'Gagal load decoder, gunakan tab Manual'; }
+      }, 200);
+    }
+  };
+  img.src = URL.createObjectURL(file);
+  input.value = '';
+}
+
+function tryJsQR(imageData, statusEl) {
+  const result = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+  if (result && result.data) {
+    statusEl.textContent = '✓ QR terbaca!';
+    document.getElementById('inp-barcode-manual').value = result.data;
+    doLoginBarcode(result.data);
+  } else {
+    statusEl.textContent = 'QR tidak terbaca, coba foto lebih dekat & pencahayaan cukup';
+  }
+}
+
 async function startBarcodeScanner() {
   if (LOGIN_STATE.barcodeStream) return; // sudah aktif
   setCamNotice(null);
