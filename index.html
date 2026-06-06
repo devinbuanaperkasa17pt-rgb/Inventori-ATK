@@ -262,7 +262,15 @@ tbody tr:hover { background: var(--surface2); }
 .cam-notice ol li { margin-bottom: 2px; }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<script>
+// jsQR inline loader — load async, simpan ke window.jsQR
+(function(){
+  var s = document.createElement('script');
+  s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+  s.async = true;
+  document.head.appendChild(s);
+})();
+</script>
 </head>
 <body>
 
@@ -1015,14 +1023,28 @@ async function startBarcodeScanner() {
           }
         } catch(e) {}
       }, 400);
-    } else if (typeof jsQR !== 'undefined') {
-      // Fallback jsQR untuk iOS Safari dan browser lain yang tidak support BarcodeDetector
+    } else {
+      // Fallback jsQR — tunggu sampai library selesai load (maks 5 detik)
       const canvas = document.createElement('canvas');
       const ctx2d  = canvas.getContext('2d');
+      let jsqrRetry = 0;
       LOGIN_STATE.scanInterval = setInterval(() => {
+        // Kalau jsQR belum load, tunggu dulu
+        if (typeof jsQR === 'undefined') {
+          jsqrRetry++;
+          if (jsqrRetry > 50) { // 50 × 100ms = 5 detik, baru tampil warning
+            clearInterval(LOGIN_STATE.scanInterval);
+            LOGIN_STATE.scanInterval = null;
+            setCamNotice('warn',
+              '<b>Scan otomatis tidak tersedia di browser ini</b>' +
+              'Ketikkan kode barcode secara manual di kolom di bawah.'
+            );
+          }
+          return;
+        }
         if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
-        canvas.width  = video.videoWidth;
-        canvas.height = video.videoHeight;
+        canvas.width  = video.videoWidth  || 320;
+        canvas.height = video.videoHeight || 240;
         ctx2d.drawImage(video, 0, 0, canvas.width, canvas.height);
         const imageData = ctx2d.getImageData(0, 0, canvas.width, canvas.height);
         const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
@@ -1032,12 +1054,7 @@ async function startBarcodeScanner() {
           document.getElementById('inp-barcode-manual').value = code.data;
           doLoginBarcode(code.data);
         }
-      }, 300);
-    } else {
-      setCamNotice('warn',
-        '<b>Scan otomatis tidak tersedia di browser ini</b>' +
-        'Ketikkan kode barcode secara manual di kolom di bawah, atau gunakan scanner USB/Bluetooth.'
-      );
+      }, 100);
     }
   } catch(e) {
     const name = e.name || '';
