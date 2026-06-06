@@ -262,15 +262,7 @@ tbody tr:hover { background: var(--surface2); }
 .cam-notice ol li { margin-bottom: 2px; }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script>
-// jsQR inline loader — load async, simpan ke window.jsQR
-(function(){
-  var s = document.createElement('script');
-  s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
-  s.async = true;
-  document.head.appendChild(s);
-})();
-</script>
+<script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
 </head>
 <body>
 
@@ -1031,144 +1023,62 @@ function tryJsQR(imageData, statusEl) {
 }
 
 async function startBarcodeScanner() {
-  if (LOGIN_STATE.barcodeStream) return; // sudah aktif
+  if (LOGIN_STATE.zxingReader) return;
   setCamNotice(null);
 
-  // Cek apakah halaman dibuka via protokol yang aman
   const proto = location.protocol;
   if (proto !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-    setCamNotice('error',
-      '<b>Kamera tidak bisa diakses — halaman harus dibuka via HTTPS</b>' +
-      'Browser modern memblokir akses kamera pada halaman HTTP biasa atau file://. ' +
-      '<b>Solusi:</b> buka halaman ini dengan alamat <b>https://...</b>, bukan http:// atau dari file lokal. ' +
-      '<br><br><span style="opacity:0.8">Sementara gunakan tab <b>Manual</b> atau ketik barcode di bawah.</span>'
-    );
+    setCamNotice('error', '<b>Halaman harus dibuka via HTTPS</b>Browser memblokir kamera pada HTTP.');
+    const bs = document.getElementById('btn-start-scan');
+    if (bs) { bs.style.display = 'inline-flex'; bs.disabled = false; }
+    return;
+  }
+  if (typeof ZXing === 'undefined') {
+    setCamNotice('warn', '<b>Library scanner belum siap, tunggu sebentar lalu coba lagi.</b>');
     const bs = document.getElementById('btn-start-scan');
     if (bs) { bs.style.display = 'inline-flex'; bs.disabled = false; }
     return;
   }
 
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    setCamNotice('error',
-      '<b>Browser tidak mendukung akses kamera</b>' +
-      'Gunakan Chrome/Edge/Firefox terbaru dan pastikan halaman dibuka via <b>HTTPS</b>. ' +
-      'Gunakan tab <b>Manual</b> atau ketik barcode di bawah.'
-    );
-    return;
-  }
-
-  // Cek apakah izin sudah pernah diblokir sebelum memanggil getUserMedia
-  if (navigator.permissions) {
-    try {
-      const perm = await navigator.permissions.query({ name: 'camera' });
-      if (perm.state === 'denied') {
-        showCameraBlockedNotice();
-        const bs = document.getElementById('btn-start-scan');
-        if (bs) { bs.style.display = 'inline-flex'; bs.disabled = false; }
-        return;
-      }
-    } catch(e) { /* browser tidak support query 'camera' */ }
-  }
-
-  // Panggil getUserMedia → popup "Izinkan/Blokir" muncul di sini
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    LOGIN_STATE.barcodeStream = stream;
     const video = document.getElementById('barcode-video');
-    video.srcObject = stream;
     video.style.display = 'block';
     document.getElementById('barcode-placeholder').style.display = 'none';
-    document.getElementById('btn-start-scan').style.display = 'none';
     document.getElementById('btn-stop-scan').style.display = 'inline-flex';
     document.getElementById('barcode-scan-status').textContent = 'Menunggu barcode...';
-    await video.play();
-    if ('BarcodeDetector' in window) {
-      const detector = new BarcodeDetector({ formats: ['qr_code','code_128','code_39','ean_13','ean_8','data_matrix'] });
-      LOGIN_STATE.scanInterval = setInterval(async () => {
-        try {
-          const barcodes = await detector.detect(video);
-          if (barcodes.length > 0) {
-            const code = barcodes[0].rawValue;
-            stopBarcodeScanner();
-            document.getElementById('barcode-scan-status').textContent = '✓ Barcode terbaca!';
-            document.getElementById('inp-barcode-manual').value = code;
-            await doLoginBarcode(code);
-          }
-        } catch(e) {}
-      }, 400);
-    } else {
-      // Fallback jsQR — tunggu sampai library selesai load (maks 5 detik)
-      const canvas = document.createElement('canvas');
-      const ctx2d  = canvas.getContext('2d');
-      let jsqrRetry = 0;
-      LOGIN_STATE.scanInterval = setInterval(() => {
-        // Kalau jsQR belum load, tunggu dulu
-        if (typeof jsQR === 'undefined') {
-          jsqrRetry++;
-          if (jsqrRetry > 50) { // 50 × 100ms = 5 detik, baru tampil warning
-            clearInterval(LOGIN_STATE.scanInterval);
-            LOGIN_STATE.scanInterval = null;
-            setCamNotice('warn',
-              '<b>Scan otomatis tidak tersedia di browser ini</b>' +
-              'Ketikkan kode barcode secara manual di kolom di bawah.'
-            );
-          }
-          return;
-        }
-        if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
-        canvas.width  = video.videoWidth  || 320;
-        canvas.height = video.videoHeight || 240;
-        ctx2d.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const imageData = ctx2d.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
-        if (code && code.data) {
+
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const codeReader = new ZXing.BrowserMultiFormatReader(hints);
+    LOGIN_STATE.zxingReader = codeReader;
+
+    await codeReader.decodeFromConstraints(
+      { video: { facingMode: 'environment' } },
+      video,
+      (result, err) => {
+        if (result) {
+          const code = result.getText();
           stopBarcodeScanner();
-          document.getElementById('barcode-scan-status').textContent = '✓ Barcode terbaca!';
-          document.getElementById('inp-barcode-manual').value = code.data;
-          doLoginBarcode(code.data);
+          document.getElementById('barcode-scan-status').textContent = '\u2713 Barcode terbaca!';
+          document.getElementById('inp-barcode-manual').value = code;
+          doLoginBarcode(code);
         }
-      }, 100);
-    }
+      }
+    );
   } catch(e) {
     const name = e.name || '';
     if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
-      // Bedakan: user baru saja klik "Blokir" vs sudah diblokir sebelumnya
-      if (navigator.permissions) {
-        try {
-          const perm = await navigator.permissions.query({ name: 'camera' });
-          if (perm.state === 'denied') {
-            showCameraBlockedNotice(); // sudah pernah diblokir sebelumnya
-          } else {
-            // User baru klik "Blokir" di popup tadi
-            setCamNotice('warn',
-              '<b>Kamera tidak diizinkan</b>' +
-              'Anda memilih <b>Blokir</b> pada dialog izin. Klik tombol di bawah untuk mencoba lagi dan pilih <b>Izinkan</b>.' +
-              '<br><span style="opacity:0.8">Atau gunakan tab <b>Manual</b> untuk login tanpa kamera.</span>'
-            );
-            const bs = document.getElementById('btn-start-scan');
-            if (bs) { bs.style.display = 'inline-flex'; bs.disabled = false; }
-          }
-        } catch(e2) { showCameraBlockedNotice(); }
-      } else {
-        showCameraBlockedNotice();
-      }
+      setCamNotice('warn', '<b>Kamera tidak diizinkan</b>Pilih <b>Izinkan</b> saat muncul dialog, lalu coba lagi.<br><span style="opacity:0.8">Atau gunakan tab <b>Manual</b>.</span>');
+      const bs = document.getElementById('btn-start-scan');
+      if (bs) { bs.style.display = 'inline-flex'; bs.disabled = false; }
     } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-      setCamNotice('error',
-        '<b>Kamera tidak ditemukan</b>' +
-        'Perangkat ini tidak memiliki kamera atau kamera tidak terdeteksi. ' +
-        'Gunakan tab <b>Manual</b> atau ketik barcode di bawah.'
-      );
-    } else if (name === 'NotReadableError' || name === 'TrackStartError') {
-      setCamNotice('error',
-        '<b>Kamera sedang digunakan aplikasi lain</b>' +
-        'Tutup aplikasi lain yang menggunakan kamera, lalu klik <b>Aktifkan Kamera</b> kembali.'
-      );
+      setCamNotice('error', '<b>Kamera tidak ditemukan</b>Gunakan tab <b>Manual</b>.');
+    } else if (name === 'NotReadableError') {
+      setCamNotice('error', '<b>Kamera dipakai aplikasi lain</b>Tutup aplikasi lain lalu coba lagi.');
       const bs = document.getElementById('btn-start-scan');
       if (bs) { bs.style.display = 'inline-flex'; bs.disabled = false; }
     } else {
-      setCamNotice('error',
-        `<b>Gagal mengakses kamera</b>${e.message || 'Error tidak diketahui'}. Gunakan tab <b>Manual</b>.`
-      );
+      setCamNotice('error', '<b>Gagal mengakses kamera: </b>' + (e.message||'') + '. Gunakan tab <b>Manual</b>.');
       const bs = document.getElementById('btn-start-scan');
       if (bs) { bs.style.display = 'inline-flex'; bs.disabled = false; }
     }
@@ -1176,6 +1086,10 @@ async function startBarcodeScanner() {
 }
 
 function stopBarcodeScanner() {
+  if (LOGIN_STATE.zxingReader) {
+    try { LOGIN_STATE.zxingReader.reset(); } catch(e) {}
+    LOGIN_STATE.zxingReader = null;
+  }
   if (LOGIN_STATE.barcodeStream) {
     LOGIN_STATE.barcodeStream.getTracks().forEach(t => t.stop());
     LOGIN_STATE.barcodeStream = null;
@@ -1186,7 +1100,7 @@ function stopBarcodeScanner() {
   const ph = document.getElementById('barcode-placeholder');
   if (ph) ph.style.display = 'block';
   const bs = document.getElementById('btn-start-scan');
-  if (bs) { bs.style.display = 'inline-flex'; bs.disabled = false; bs.textContent = ''; bs.innerHTML = '<svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg> Izinkan & Aktifkan Kamera'; }
+  if (bs) { bs.style.display = 'inline-flex'; bs.disabled = false; bs.innerHTML = '<svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg> Izinkan & Aktifkan Kamera'; }
   const bst = document.getElementById('btn-stop-scan');
   if (bst) bst.style.display = 'none';
 }
